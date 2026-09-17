@@ -1,405 +1,555 @@
-// Snark grammar for vix v0 — the build language.
-//
-// Surface per docs/design/sketches/lua.vix.md (vixen repo): Rust-flavored, minimal
-// innovation points. Distinctive constructs:
-//   - path literals  p"lua-5.4.8/src"   (strings NEVER coerce to paths)
-//   - flag atoms     -O2 -DLUA_USE_LINUX (typed command-vocabulary atoms)
-//   - command blocks cc! { -c {src} -o {out} }  — token soup + {expr} splices;
-//     per-command grammars refine these via injection later
-//   - `/` as the Tree/Path join operator (mul-tier precedence)
-//   - kwargs with defaults at call sites: fetch(url: "…", sha256: "…")
-//
-// v0 scope: exactly enough to parse the lua sketch cleanly. Grown by critique.
+// Tree-sitter grammar for Vix. Mirrors crates/vixen-syntax (the reference
+// parser) in the vix repository: same keyword set, same precedence table,
+// same contextual keywords.
 
 const PREC = {
   or: 1,
   and: 2,
   compare: 3,
-  add: 4,
-  mul: 5, // `/` join lives here
-  unary: 6,
-  postfix: 7,
+  range: 4,
+  add: 5,
+  mul: 6,
+  unary: 7,
+  postfix: 8,
+  closure: -1,
 };
 
-function sepBy(sep, rule) {
-  return optional(seq(rule, repeat(seq(sep, rule)), optional(sep)));
+const IDENT = /[a-zA-Z_][a-zA-Z0-9_]*/;
+
+function sep(rule, delim) {
+  return optional(seq(rule, repeat(seq(delim, rule)), optional(delim)));
+}
+
+function commaSep(rule) {
+  return sep(rule, ",");
 }
 
 module.exports = grammar({
   name: "vix",
 
-  extras: ($) => [/\s+/, $.line_comment, $.doc_comment],
+  extras: ($) => [/[ \t\r\n\f]+/, $.line_comment, $.module_comment],
 
-  word: ($) => $.identifier,
+  externals: ($) => [$.doc_text, $.rule_text, $.template_text, $._error_sentinel],
 
-  // The scrutinee/struct-literal split below is resolved BY CONSTRUCTION
-  // (`_scrutinee` is `_expr` minus `struct_literal` — Rust's rule), but
-  // tree-sitter's LR generator still needs the shared-prefix states declared
-  // so it can GLR-split them; without this, `tree-sitter generate` refuses.
-  // Snark's own executor is unaffected (it already handles the facts).
+  supertypes: ($) => [$._expr, $._pattern, $._type, $._item],
+
   conflicts: ($) => [
-    [$._scrutinee, $.struct_literal],
-    [$._expr, $.struct_literal],
+    [$.record_field, $._path_expr],
+    [$._path_segment, $._path_expr],
+    [$.param_list, $._path_segment],
+    [$.method_call_expr, $.field_expr],
+    [$.annotated_expr],
+    [$._path_segment, $.record_field],
+    [$.path, $._path_expr],
+    [$._path_segment, $.identifier_pattern],
+    [$.path],
+    [$.record_expr, $._expr],
+    [$.record_expr, $._path_expr],
+    [$.map_entry, $.record_field],
+    [$.anon_record_expr, $.block],
   ],
 
   rules: {
-    // Every AST-relevant child carries a field(): the typed AST (and its lowering) is
-    // DERIVED from fields + cardinality (bare -> T, optional -> Option<T>, repeat -> Vec<T>)
-    // by vix's build.rs. An unfielded child is invisible to the AST by construction.
-    source_file: ($) => repeat(field("item", $._item)),
+    source_file: ($) => repeat($._item),
 
-    // ---- items ----------------------------------------------------------
-    _item: ($) => choice($.use_item, $.fn_item, $.struct_item, $.enum_item),
+    // ---------------------------------------------------------------- items
 
-    use_item: ($) => seq("use", field("tree", $.use_tree), ";"),
-    use_tree: ($) =>
-      seq(
-        field("segment", $.identifier),
-        repeat(seq("::", field("segment", $.identifier))),
-        optional(seq("::", "{", sepBy(",", field("leaf", $.identifier)), "}")),
+    _item: ($) =>
+      choice(
+        $.doc,
+        $.rule,
+        $.fn_item,
+        $.realizer_item,
+        $.process_item,
+        $.struct_item,
+        $.enum_item,
+        $.use_item,
+        $.import_item,
+        $.namespace_item,
+        $.source_item,
+        $.ledger_item,
       ),
 
-    fn_item: ($) =>
+    visibility: (_) => "pub",
+
+    attribute: ($) =>
+      seq("#", "[", field("name", $.identifier), optional($.attribute_args), "]"),
+
+    attribute_args: ($) => seq("{", commaSep($.attribute_arg), "}"),
+
+    attribute_arg: ($) =>
+      seq(field("name", $.identifier), ":", field("value", $._expr)),
+
+    doc: ($) =>
       seq(
-        optional(field("vis", "pub")),
-        "fn",
-        field("name", $.fn_name),
+        repeat($.attribute), optional($.visibility),
+        alias(token(seq("doc", /[ \t]*/, "{")), "doc"),
+        repeat(choice($.doc_text, $.example)),
+        "}",
+      ),
+
+    example: ($) => seq("example", field("name", $.identifier), field("body", $.block)),
+
+    rule: ($) =>
+      seq(
+        repeat($.attribute), optional($.visibility),
+        "rule",
+        field("name", $.identifier),
+        "{",
+        repeat(choice($.rule_text, $.test)),
+        "}",
+      ),
+
+    test: ($) => seq("test", field("name", $.identifier), field("body", $.block)),
+
+    fn_item: ($) => seq(repeat($.attribute), optional($.visibility), "fn", $._callable),
+
+    realizer_item: ($) => seq(repeat($.attribute), optional($.visibility), "realizer", $._callable),
+
+    _callable: ($) =>
+      seq(
+        field("name", $.identifier),
         optional(field("generics", $.generic_params)),
+        field("params", $.param_list),
+        optional(field("where", $.where_params)),
+        optional(seq("->", field("return_type", $._type))),
+        choice(field("body", $.block), ";"),
+      ),
+
+    process_item: ($) =>
+      seq(
+        repeat($.attribute), optional($.visibility),
+        "process",
+        field("name", $.identifier),
+        field("params", $.param_list),
+        field("body", $.block),
+      ),
+
+    generic_params: ($) =>
+      choice(
+        seq("<", commaSep($.type_param), ">"),
+        seq("[", commaSep($.type_param), "]"),
+      ),
+
+    type_param: ($) => $.identifier,
+
+    param_list: ($) => seq("(", commaSep(choice($.self, $.param)), ")"),
+
+    param: ($) =>
+      seq(
+        repeat($.attribute),
+        field("pattern", $._pattern),
+        optional(seq(":", field("type", $._type))),
+      ),
+
+    where_params: ($) => seq("where", "{", commaSep($.where_param), "}"),
+
+    where_param: ($) => seq(field("name", $.identifier), ":", field("type", $._type)),
+
+    struct_item: ($) =>
+      seq(
+        repeat($.attribute), optional($.visibility),
+        "struct",
+        field("name", $.identifier),
+        optional(field("generics", $.generic_params)),
+        choice(";", field("fields", $.field_list)),
+      ),
+
+    field_list: ($) => seq("{", commaSep($.field_def), "}"),
+
+    field_def: ($) =>
+      seq(repeat($.attribute), field("name", $.identifier), ":", field("type", $._type)),
+
+    enum_item: ($) =>
+      seq(
+        repeat($.attribute), optional($.visibility),
+        "enum",
+        field("name", $.identifier),
+        optional(field("generics", $.generic_params)),
+        "{",
+        commaSep($.variant),
+        "}",
+      ),
+
+    variant: ($) =>
+      seq(field("name", $.identifier), optional(choice($.tuple_field_list, $.field_list))),
+
+    tuple_field_list: ($) => seq("(", commaSep($._type), ")"),
+
+    use_item: ($) => seq(repeat($.attribute), optional($.visibility), "use", $.use_tree, ";"),
+
+    import_item: ($) => seq(repeat($.attribute), optional($.visibility), "import", $.use_tree, ";"),
+
+    use_tree: ($) =>
+      choice(
+        $.use_tree_list,
+        seq(
+          field("path", $.path),
+          optional(seq(".", $.use_tree_list)),
+          optional(seq("as", field("alias", $.identifier))),
+        ),
+      ),
+
+    use_tree_list: ($) => seq("{", commaSep($.use_tree), "}"),
+
+    namespace_item: ($) =>
+      seq(
+        repeat($.attribute), optional($.visibility),
+        "namespace",
+        field("name", $.identifier),
+        optional(field("generics", $.generic_params)),
+        "{",
+        repeat($._item),
+        "}",
+      ),
+
+    source_item: ($) =>
+      seq(
+        repeat($.attribute), optional($.visibility),
+        "source",
+        field("name", $.identifier),
+        field("params", $.param_list),
+        "{",
+        repeat($.query),
+        "}",
+      ),
+
+    query: ($) =>
+      seq(
+        "query",
+        field("name", $.identifier),
+        field("params", $.param_list),
+        optional(seq("->", field("return_type", $._type))),
+        ";",
+      ),
+
+    ledger_item: ($) =>
+      seq(
+        repeat($.attribute), optional($.visibility),
+        "ledger",
+        field("name", $.identifier),
+        field("params", $.param_list),
+        "using",
+        field("codec", $.identifier),
+        "{",
+        repeat($.resource),
+        "}",
+      ),
+
+    resource: ($) => seq("resource", $._callable),
+
+    // ---------------------------------------------------------------- paths
+
+    // `a.b.c` or `./module.item` in import, type, and pattern positions.
+    path: ($) =>
+      seq(optional(seq(".", "/")), $._path_segment, repeat(seq(".", $._path_segment))),
+
+    _path_segment: ($) => choice($.identifier, $.self),
+
+    self: (_) => "self",
+
+    // ---------------------------------------------------------------- types
+
+    _type: ($) => choice($.array_type, $.tuple_type, $.fn_type, $.path_type),
+
+    array_type: ($) => seq("[", $._type, "]"),
+
+    tuple_type: ($) => seq("(", commaSep($._type), ")"),
+
+    fn_type: ($) =>
+      seq("fn", "(", commaSep($._type), ")", optional(seq("->", $._type))),
+
+    path_type: ($) => seq(field("path", $.path), optional(field("args", $.generic_args))),
+
+    generic_args: ($) =>
+      choice(seq("<", commaSep($._type), ">"), seq("[", commaSep($._type), "]")),
+
+    // ------------------------------------------------------------- patterns
+
+    _pattern: ($) =>
+      choice(
+        $.wildcard_pattern,
+        $.rest_pattern,
+        $.tuple_pattern,
+        $.literal_pattern,
+        $.identifier_pattern,
+        $.tuple_struct_pattern,
+        $.record_pattern,
+        $.path_pattern,
+      ),
+
+    wildcard_pattern: (_) => "_",
+    rest_pattern: (_) => "..",
+    tuple_pattern: ($) => seq("(", commaSep($._pattern), ")"),
+    literal_pattern: ($) => seq(optional("-"), $._literal),
+    identifier_pattern: ($) => $.identifier,
+    tuple_struct_pattern: ($) => seq(field("path", $.path), "(", commaSep($._pattern), ")"),
+    record_pattern: ($) =>
+      seq(field("path", $.path), "{", commaSep(choice($.record_pattern_field, $.rest_pattern)), "}"),
+    record_pattern_field: ($) =>
+      seq(field("name", $.identifier), optional(seq(":", field("pattern", $._pattern)))),
+    path_pattern: ($) => prec(-1, $.path),
+
+    // ---------------------------------------------------------- expressions
+
+    _expr: ($) =>
+      choice(
+        $.annotated_expr,
+        $.binary_expr,
+        $.unary_expr,
+        $.request_expr,
+        $.call_expr,
+        $.index_expr,
+        $.try_expr,
+        $.method_call_expr,
+        $.field_expr,
+        $.metadata_expr,
+        $.where_expr,
+        $.exec_expr,
+        $.template,
+        $._literal,
+        $.symbol_expr,
+        $.fn_closure_expr,
+        $.partial_expr,
+        $.tree_expr,
+        $.record_expr,
+        $._path_expr,
+        $.paren_expr,
+        $.tuple_expr,
+        $.array_expr,
+        $.map_expr,
+        $.set_expr,
+        $.closure_expr,
+        $.anon_record_expr,
+        $.block,
+        $.if_expr,
+        $.match_expr,
+        $.fail_expr,
+        $.yield_expr,
+      ),
+
+    annotated_expr: ($) => prec.right(seq(repeat1($.attribute), $._expr)),
+
+    binary_expr: ($) => {
+      const table = [
+        [PREC.or, "||"],
+        [PREC.and, "&&"],
+        [PREC.compare, choice("==", "!=", "<", ">", "<=", ">=", "<=>")],
+        [PREC.range, ".."],
+        [PREC.add, choice("+", "-", "++")],
+        [PREC.mul, choice("*", "/", "%")],
+      ];
+      return choice(
+        ...table.map(([p, op]) =>
+          prec.left(p, seq(field("left", $._expr), field("operator", op), field("right", $._expr))),
+        ),
+      );
+    },
+
+    unary_expr: ($) => prec(PREC.unary, seq(field("operator", choice("-", "!")), $._expr)),
+
+    request_expr: ($) => prec(PREC.unary, seq("@", $._expr)),
+
+    call_expr: ($) =>
+      prec(PREC.postfix, seq(field("function", $._expr), field("args", $.arg_list))),
+
+    arg_list: ($) => seq("(", commaSep($._expr), ")"),
+
+    index_expr: ($) => prec(PREC.postfix, seq($._expr, "[", $._expr, "]")),
+
+    try_expr: ($) => prec(PREC.postfix, seq($._expr, "?")),
+
+    method_call_expr: ($) =>
+      prec(
+        PREC.postfix,
+        choice(
+          seq(
+            field("receiver", $._expr),
+            ".",
+            field("method", $.identifier),
+            field("args", $.arg_list),
+          ),
+          seq(
+            field("receiver", $._expr),
+            "::",
+            "<",
+            field("type_args", $._type),
+            ">",
+            field("args", $.arg_list),
+          ),
+        ),
+      ),
+
+    field_expr: ($) =>
+      prec(
+        PREC.postfix,
+        seq(field("value", $._expr), ".", field("field", choice($.identifier, $.integer))),
+      ),
+
+    metadata_expr: ($) =>
+      prec(PREC.postfix, seq(field("value", $._expr), "::", field("name", $.identifier))),
+
+    where_expr: ($) =>
+      prec(PREC.postfix, seq($._expr, "where", "{", commaSep($.where_arg), "}")),
+
+    where_arg: ($) =>
+      seq(field("name", $.identifier), optional(seq(":", field("value", $._expr)))),
+
+    // `cc`-c {src}`` and `exec sh`echo hi``
+    exec_expr: ($) =>
+      choice(
+        prec(PREC.postfix, seq(field("tag", $._expr), field("template", $.template))),
+        seq("exec", field("tag", $.path), field("template", $.template)),
+      ),
+
+    template: ($) => seq("`", repeat($._template_part), "`"),
+
+    _template_part: ($) =>
+      choice($.template_text, $.template_interpolation, $.template_for, $.template_if),
+
+    template_interpolation: ($) => seq("{", $._expr, "}"),
+
+    template_for: ($) =>
+      seq(
+        "{",
+        "for",
+        field("binding", $.identifier),
+        "in",
+        field("collection", $._expr),
+        "}",
+        repeat($._template_part),
+        "{/for}",
+      ),
+
+    template_if: ($) =>
+      seq(
+        "{",
+        "if",
+        field("condition", $._expr),
+        "}",
+        repeat($._template_part),
+        optional(seq("{else}", repeat($._template_part))),
+        "{/if}",
+      ),
+
+    _literal: ($) => choice($.integer, $.float, $.string, $.prefixed_string, $.boolean),
+
+    integer: (_) => /[0-9][0-9_]*([a-zA-Z][a-zA-Z0-9_]*)?/,
+    float: (_) => /[0-9][0-9_]*\.[0-9][0-9_]*([a-zA-Z][a-zA-Z0-9_]*)?/,
+    string: (_) => /"([^"\\]|\\.)*"/,
+    prefixed_string: ($) =>
+      seq(field("prefix", alias(token(seq(IDENT, /"/)), $.string_prefix)), alias(token.immediate(/([^"\\]|\\.)*"/), $.string_body)),
+    boolean: (_) => choice("true", "false"),
+
+    symbol_expr: ($) => seq(":", $.identifier),
+
+    fn_closure_expr: ($) =>
+      seq(
+        "fn",
         field("params", $.param_list),
         optional(seq("->", field("return_type", $._type))),
         field("body", $.block),
       ),
 
-    // Record struct `struct T { a: A, b: B = default }`, tuple struct
-    // `struct T(A);` (newtype), unit struct `struct T;`. Field defaults mirror
-    // kwargs-with-defaults at call sites.
-    struct_item: ($) =>
+    partial_expr: ($) => seq("partial", field("path", $.path), $.record_fields),
+
+    tree_expr: ($) =>
+      seq(alias(token(seq("tree", /[ \t]*/, "{")), "tree"), commaSep($.map_entry), "}"),
+
+    record_expr: ($) => seq(field("path", $.path), $.record_fields),
+
+    record_fields: ($) => seq("{", commaSep(choice($.spread, $.record_field)), "}"),
+
+    record_field: ($) =>
       seq(
-        optional(field("vis", "pub")),
-        "struct",
-        field("name", $.identifier),
-        optional(field("generics", $.generic_params)),
-        choice(field("fields", $.field_list), seq(field("tuple", $.tuple_fields), ";"), ";"),
+        field("name", choice($.identifier, alias("namespace", $.identifier))),
+        optional(seq(":", field("value", $._expr))),
       ),
 
-    enum_item: ($) =>
-      seq(
-        optional(field("vis", "pub")),
-        "enum",
-        field("name", $.identifier),
-        optional(field("generics", $.generic_params)),
-        "{",
-        sepBy(",", field("variant", $.variant)),
-        "}",
+    spread: ($) => seq("..", $._expr),
+
+    _path_expr: ($) => choice($.identifier, $.self),
+
+    paren_expr: ($) => seq("(", $._expr, ")"),
+
+    tuple_expr: ($) =>
+      choice(seq("(", ")"), seq("(", $._expr, ",", commaSep($._expr), ")")),
+
+    array_expr: ($) => seq("[", commaSep(choice($.spread, $._expr)), "]"),
+
+    map_expr: ($) => seq("%{", commaSep($.map_entry), "}"),
+
+    map_entry: ($) =>
+      seq(field("key", $._expr), choice("=>", ":"), field("value", $._expr)),
+
+    set_expr: ($) => seq("%[", commaSep($._expr), "]"),
+
+    anon_record_expr: ($) =>
+      seq("{", commaSep(choice($.spread, $.record_field, $.map_entry)), "}"),
+
+    closure_expr: ($) =>
+      prec.right(
+        PREC.closure,
+        seq(field("params", $.closure_params), field("body", $._expr)),
       ),
 
-    // Unit `Phony`, tuple `Object(Path)`, record `Archive { name: String }`.
-    // Declaration order IS the total order — reordering variants is semantic.
-    variant: ($) =>
-      seq(
-        field("name", $.identifier),
-        optional(choice(field("tuple", $.tuple_fields), field("fields", $.field_list))),
-      ),
+    closure_params: ($) => choice("||", seq("|", commaSep($.closure_param), "|")),
 
-    field_list: ($) => seq("{", sepBy(",", field("field", $.field_decl)), "}"),
-    field_decl: ($) =>
-      seq(
-        field("name", $.identifier),
-        ":",
-        field("type", $._type),
-        optional(seq("=", field("default", $._expr))),
-      ),
-    tuple_fields: ($) => seq("(", sepBy(",", field("type", $._type)), ")"),
+    closure_param: ($) =>
+      seq(field("pattern", $._pattern), optional(seq(":", field("type", $._type)))),
 
-    // Type parameters: no lifetimes (values, not places), and no hash/eq/ord
-    // bounds — every vix value has them by construction.
-    generic_params: ($) => seq("<", sepBy(",", field("param", $.identifier)), ">"),
+    block: ($) => seq("{", repeat($._statement), optional($._expr), "}"),
 
-    param_list: ($) => seq("(", sepBy(",", field("param", $.param)), ")"),
-    param: ($) => seq(field("name", $.identifier), ":", field("type", $._type)),
-
-    // ---- types ----------------------------------------------------------
-    _type: ($) =>
-      choice($.array_type, $.fn_type, $.tuple_type, $.generic_type, $.type_path),
-    array_type: ($) => seq("[", field("elem", $._type), "]"),
-    generic_type: ($) =>
-      seq(field("base", $.type_path), "<", sepBy(",", field("arg", $._type)), ">"),
-    tuple_type: ($) =>
-      seq("(", field("elem", $._type), ",", sepBy(",", field("elem", $._type)), ")"),
-    fn_type: ($) =>
-      seq(
-        "fn",
-        "(",
-        sepBy(",", field("param", $._type)),
-        ")",
-        optional(seq("->", field("return_type", $._type))),
-      ),
-    type_path: ($) =>
-      seq(field("segment", $.identifier), repeat(seq("::", field("segment", $.identifier)))),
-
-    // ---- statements / blocks ---------------------------------------------
-    block: ($) =>
-      seq("{", repeat(field("stmt", $._statement)), optional(field("tail", $._expr)), "}"),
-
-    _statement: ($) => choice($.let_statement, $.expr_statement),
+    _statement: ($) =>
+      choice($.doc, $.let_statement, $.contribution, $.expr_statement),
 
     let_statement: ($) =>
       seq(
         "let",
-        field("name", $.identifier),
+        field("pattern", $._pattern),
         optional(seq(":", field("type", $._type))),
         "=",
         field("value", $._expr),
         ";",
       ),
 
-    expr_statement: ($) => seq(field("expr", $._expr), ";"),
+    contribution: ($) => seq("@", $._expr, ";"),
 
-    // ---- expressions ------------------------------------------------------
-    _expr: ($) =>
-      choice(
-        $.binary,
-        $.unary,
-        $.call,
-        $.method_call,
-        $.field_access,
-        $.match_expr,
-        $.closure,
-        $.command_block,
-        $.struct_literal,
-        $.map_literal,
-        $.tuple_expr,
-        $.array,
-        $.paren,
-        $.scoped_identifier,
-        $.identifier,
-        $.template_string,
-        $.string,
-        $.path_literal,
-        $.number,
-        $.boolean,
+    expr_statement: ($) =>
+      choice(seq($._expr, ";"), prec(1, choice($.if_expr, $.match_expr, $.block))),
+
+    if_expr: ($) =>
+      seq(
+        "if",
+        field("condition", $._expr),
+        field("consequence", $.block),
+        optional(seq("else", field("alternative", choice($.if_expr, $.block)))),
       ),
-
-    // `match X {` — a bare struct literal as scrutinee would be ambiguous with
-    // the match body's `{` (vix has no block/if exprs, so this is the ONLY
-    // struct-literal ambiguity). Rust's rule, shallowly: parenthesize it.
-    _scrutinee: ($) =>
-      choice(
-        $.binary,
-        $.unary,
-        $.call,
-        $.method_call,
-        $.field_access,
-        $.match_expr,
-        $.closure,
-        $.map_literal,
-        $.tuple_expr,
-        $.array,
-        $.paren,
-        $.scoped_identifier,
-        $.identifier,
-        $.template_string,
-        $.string,
-        $.path_literal,
-        $.number,
-        $.boolean,
-      ),
-
-    binary: ($) => {
-      const table = [
-        [PREC.or, "||"],
-        [PREC.and, "&&"],
-        [PREC.compare, choice("==", "!=", "<", "<=", ">", ">=")],
-        [PREC.add, choice("+", "-")],
-        [PREC.mul, choice("*", "/", "%")],
-      ];
-      return choice(
-        ...table.map(([p, op]) =>
-          prec.left(p, seq(field("left", $._expr), field("op", op), field("right", $._expr))),
-        ),
-      );
-    },
-
-    unary: ($) =>
-      prec(PREC.unary, seq(field("op", choice("-", "!")), field("operand", $._expr))),
-
-    call: ($) =>
-      prec(
-        PREC.postfix,
-        seq(field("callee", choice($.identifier, $.scoped_identifier)), field("args", $.arg_list)),
-      ),
-
-    method_call: ($) =>
-      prec(
-        PREC.postfix,
-        seq(field("receiver", $._expr), ".", field("name", $.identifier), field("args", $.arg_list)),
-      ),
-
-    // `.name` field access and `.0` tuple index share one node. tuple_index is
-    // a DEDICATED integer token: the only states where it's valid are after
-    // `.`, where `number` (with its fraction part) is NOT — so `t.0.1` lexes
-    // as `0`, `.`, `1` by construction. Per-state lexing again: no float token
-    // is ever formed and re-split (the rustc hack rust-analyzer hates).
-    field_access: ($) =>
-      prec(
-        PREC.postfix,
-        seq(field("receiver", $._expr), ".", field("name", choice($.identifier, $.tuple_index))),
-      ),
-
-    arg_list: ($) => seq("(", sepBy(",", field("arg", $._arg)), ")"),
-    // `object(cc: gcc, ..)` — a trailing bare `..` makes the call PARTIAL:
-    // the result is a function of the not-yet-given (non-defaulted) params.
-    _arg: ($) => choice($.kwarg, $.partial, $._expr),
-    partial: () => "..",
-    kwarg: ($) => seq(field("name", $.identifier), ":", field("value", $._expr)),
-
-    scoped_identifier: ($) =>
-      seq(field("segment", $.identifier), repeat1(seq("::", field("segment", $.identifier)))),
-
-    closure: ($) =>
-      seq("|", sepBy(",", field("param", $.identifier)), "|", field("body", $._expr)),
 
     match_expr: ($) =>
-      seq(
-        "match",
-        field("scrutinee", $._scrutinee),
-        "{",
-        sepBy(",", field("arm", $.match_arm)),
-        "}",
-      ),
+      seq("match", field("value", $._expr), "{", repeat($.match_arm), "}"),
+
     match_arm: ($) =>
       seq(
         field("pattern", $._pattern),
-        optional(seq("if", field("guard", $._expr))),
+        optional(seq(":", field("type", $._type))),
+        optional($.match_guard),
         "=>",
         field("value", $._expr),
+        optional(","),
       ),
 
-    _pattern: ($) =>
-      choice(
-        $.wildcard_pattern,
-        $.variant_pattern,
-        $.struct_pattern,
-        $.tuple_pattern,
-        $.scoped_identifier,
-        $.identifier,
-        $.string,
-        $.number,
-        $.boolean,
-      ),
-    wildcard_pattern: () => "_",
-    // `Artifact::Object(p)` / `Some(x)` — payload patterns recurse.
-    variant_pattern: ($) =>
-      seq(
-        field("path", choice($.identifier, $.scoped_identifier)),
-        "(",
-        sepBy(",", field("arg", $._pattern)),
-        ")",
-      ),
-    // `Artifact::Archive { name, members: m, .. }` — shorthand binds the field name.
-    struct_pattern: ($) =>
-      seq(
-        field("path", choice($.identifier, $.scoped_identifier)),
-        "{",
-        sepBy(",", choice(field("field", $.field_pattern), field("rest", $.rest_pattern))),
-        "}",
-      ),
-    field_pattern: ($) =>
-      seq(field("name", $.identifier), optional(seq(":", field("pattern", $._pattern)))),
-    rest_pattern: () => "..",
-    tuple_pattern: ($) =>
-      seq("(", field("elem", $._pattern), ",", sepBy(",", field("elem", $._pattern)), ")"),
+    match_guard: ($) => seq("if", $._expr),
 
-    // Flag atoms are legal ONLY as array elements (feeding [Flag] values) — never general
-    // expressions. Per-state lexing then makes `a - b` vs `[-DFOO]` unambiguous by
-    // construction: a state either expects a flag or a binary minus, never both.
-    array: ($) => seq("[", sepBy(",", field("elem", choice($.flag, $._expr))), "]"),
+    fail_expr: ($) => prec.right(seq("fail", $._expr)),
 
-    // `Toolchain { opt: 1, ..base }` — record construction with defaults
-    // filling the gaps and `..base` functional update.
-    struct_literal: ($) =>
-      seq(
-        field("path", choice($.identifier, $.scoped_identifier)),
-        "{",
-        sepBy(",", choice(field("field", $.field_init), field("spread", $.spread))),
-        "}",
-      ),
-    field_init: ($) => seq(field("name", $.identifier), ":", field("value", $._expr)),
-    // `..base` = record update; bare `..` = PARTIAL construction ("the rest
-    // comes later" — same `..` as pattern rest and call partials).
-    spread: ($) => seq("..", optional(field("base", $._expr))),
+    yield_expr: ($) => prec.right(seq("yield", $._expr)),
 
-    // Bare braces are free in vix (no block/if exprs), so maps get the literal
-    // they deserve: `{ "CC": "clang", "OPT": flag }` — keys are expressions.
-    map_literal: ($) => seq("{", sepBy(",", field("entry", $.map_entry)), "}"),
-    map_entry: ($) => seq(field("key", $._expr), ":", field("value", $._expr)),
+    // --------------------------------------------------------------- tokens
 
-    tuple_expr: ($) =>
-      seq("(", field("elem", $._expr), ",", sepBy(",", field("elem", $._expr)), ")"),
+    identifier: (_) => IDENT,
 
-    paren: ($) => seq("(", field("inner", $._expr), ")"),
-
-    // ---- command blocks ----------------------------------------------------
-    // `cc! { -O2 -c {src / unit} -o {out} }` — the body is command-token soup with
-    // `{expr}` splices back into vix. Per-command grammars later refine the soup
-    // via injection; v0 only needs the boundary + splices to be structural.
-    command_block: ($) =>
-      seq(
-        field("command", $.identifier),
-        token.immediate("!"),
-        "{",
-        repeat(field("part", choice($.splice, $.command_token))),
-        "}",
-      ),
-    splice: ($) => seq("{", field("expr", $._expr), "}"),
-    // Anything that isn't whitespace or a brace: flags, subcommands, file names.
-    command_token: () => prec(-1, /[^{}\s]+/),
-
-    // ---- leaves ------------------------------------------------------------
-    identifier: () => /[A-Za-z_][A-Za-z0-9_]*/,
-
-    // A function may be named by an operator symbol — the spaceship
-    // `fn <=>(self: Version, other) -> Ordering` overloads comparison for the
-    // receiver's type (and `< <= > >=` derive from it); `fn +` / `fn /` etc.
-    // overload arithmetic. A single leaf token (identifier OR operator) so `name`
-    // stays a uniform leaf with a text value, not a mixed-alternative field.
-    fn_name: () =>
-      token(
-        choice(
-          /[A-Za-z_][A-Za-z0-9_]*/,
-          "<=>",
-          "==",
-          "!=",
-          "<=",
-          ">=",
-          "<",
-          ">",
-          "+",
-          "-",
-          "*",
-          "/",
-          "%",
-        ),
-      ),
-
-    // Loop-free config-generation templates. Holes are lowered into demand edges.
-    template_string: () => /tmpl"([^"\\]|\\.)*"/,
-
-    string: () => /"([^"\\]|\\.)*"/,
-
-    // Path literal: p"…" — a DISTINCT type from strings; `/` joins Tree×Path.
-    path_literal: () => /p"([^"\\]|\\.)*"/,
-
-    // Flag atom: a typed command-vocabulary token. `-O2`, `-DLUA_USE_LINUX`, `-lm`.
-    // Requires a letter immediately after the dash (so `-2` stays unary-minus number),
-    // and only appears where the grammar expects it (array elements).
-    flag: () => token(/--?[A-Za-z][A-Za-z0-9_=+.\/-]*/),
-
-    number: () => /\d+(\.\d+)?/,
-    tuple_index: () => /[0-9]+/,
-    boolean: () => choice("true", "false"),
-
-    line_comment: () => token(seq("//", /[^/\n][^\n]*|/)),
-    doc_comment: () => token(seq("///", /[^\n]*/)),
+    line_comment: (_) => token(seq("//", /[^!\n][^\n]*|/)),
+    module_comment: (_) => token(seq("//!", /[^\n]*/)),
   },
 });

@@ -1,0 +1,133 @@
+========================================
+doc block
+========================================
+
+doc {
+Returns the number of elements.
+A `}` inside prose is fine here.
+}
+pub fn len(self) -> Int;
+
+----------------------------------------
+
+(source_file
+  (doc
+    (doc_text))
+  (fn_item
+    (visibility)
+    (identifier)
+    (param_list
+      (self))
+    (path_type
+      (path
+        (identifier)))))
+
+========================================
+doc with example
+========================================
+
+namespace Array[T] {
+    doc {
+Joins string elements.
+        example csv {
+            ["a", "b"].join(",")
+        }
+    }
+    pub fn join(self, separator: String) -> String;
+}
+
+----------------------------------------
+
+(source_file
+  (namespace_item
+    (identifier)
+    (generic_params
+      (type_param
+        (identifier)))
+    (doc
+      (doc_text)
+      (example
+        (identifier)
+        (block
+          (method_call_expr
+            (array_expr
+              (string)
+              (string))
+            (identifier)
+            (arg_list
+              (string)))))
+      (doc_text))
+    (fn_item
+      (visibility)
+      (identifier)
+      (param_list
+        (self)
+        (param
+          (identifier_pattern
+            (identifier))
+          (path_type
+            (path
+              (identifier)))))
+      (path_type
+        (path
+          (identifier))))))
+
+========================================
+doc with fence
+========================================
+
+doc {
+Sample:
+```
+}
+```
+still doc
+}
+fn f() -> Int { 1 }
+
+----------------------------------------
+
+(source_file
+  (doc
+    (doc_text))
+  (fn_item
+    (identifier)
+    (param_list)
+    (path_type
+      (path
+        (identifier)))
+    (block
+      (integer))))
+
+========================================
+rule with test
+========================================
+
+pub rule join_laws {
+# Combining information
+
+Prose here.
+
+test set_laws {
+    let a = %[1];
+    a
+}
+}
+
+----------------------------------------
+
+(source_file
+  (rule
+    (visibility)
+    (identifier)
+    (rule_text)
+    (test
+      (identifier)
+      (block
+        (let_statement
+          (identifier_pattern
+            (identifier))
+          (set_expr
+            (integer)))
+        (identifier)))
+    (rule_text)))

@@ -1,0 +1,305 @@
+========================================
+fn with where and return
+========================================
+
+fn propagate(s: State) where { pkg: String, version: Version } -> Step {
+    s
+}
+
+----------------------------------------
+
+(source_file
+  (fn_item
+    (identifier)
+    (param_list
+      (param
+        (identifier_pattern
+          (identifier))
+        (path_type
+          (path
+            (identifier)))))
+    (where_params
+      (where_param
+        (identifier)
+        (path_type
+          (path
+            (identifier))))
+      (where_param
+        (identifier)
+        (path_type
+          (path
+            (identifier)))))
+    (path_type
+      (path
+        (identifier)))
+    (block
+      (identifier))))
+
+========================================
+struct and enum
+========================================
+
+struct State { domains: Map<String, VersionSet>, learned: Set<NoGood> }
+struct Unit;
+enum Step { Pass(State), Conflict(NoGood) }
+pub struct Array[T];
+
+----------------------------------------
+
+(source_file
+  (struct_item
+    (identifier)
+    (field_list
+      (field_def
+        (identifier)
+        (path_type
+          (path
+            (identifier))
+          (generic_args
+            (path_type
+              (path
+                (identifier)))
+            (path_type
+              (path
+                (identifier))))))
+      (field_def
+        (identifier)
+        (path_type
+          (path
+            (identifier))
+          (generic_args
+            (path_type
+              (path
+                (identifier))))))))
+  (struct_item
+    (identifier))
+  (enum_item
+    (identifier)
+    (variant
+      (identifier)
+      (tuple_field_list
+        (path_type
+          (path
+            (identifier)))))
+    (variant
+      (identifier)
+      (tuple_field_list
+        (path_type
+          (path
+            (identifier))))))
+  (struct_item
+    (visibility)
+    (identifier)
+    (generic_params
+      (type_param
+        (identifier)))))
+
+========================================
+use import namespace
+========================================
+
+use ./std.reconcile.{fixed_point};
+import a.b as c;
+namespace Array[T] {
+    pub fn len(self) -> Int;
+}
+
+----------------------------------------
+
+(source_file
+  (use_item
+    (use_tree
+      (path
+        (identifier)
+        (identifier))
+      (use_tree_list
+        (use_tree
+          (path
+            (identifier))))))
+  (import_item
+    (use_tree
+      (path
+        (identifier)
+        (identifier))
+      (identifier)))
+  (namespace_item
+    (identifier)
+    (generic_params
+      (type_param
+        (identifier)))
+    (fn_item
+      (visibility)
+      (identifier)
+      (param_list
+        (self))
+      (path_type
+        (path
+          (identifier))))))
+
+========================================
+attributes
+========================================
+
+#[intrinsic { provider: "vixen.tree", operation: "digest" }]
+pub fn digest(value: Any) -> String;
+#[cache]
+fn x() -> Int { 1 }
+
+----------------------------------------
+
+(source_file
+  (fn_item
+    (attribute
+      (identifier)
+      (attribute_args
+        (attribute_arg
+          (identifier)
+          (string))
+        (attribute_arg
+          (identifier)
+          (string))))
+    (visibility)
+    (identifier)
+    (param_list
+      (param
+        (identifier_pattern
+          (identifier))
+        (path_type
+          (path
+            (identifier)))))
+    (path_type
+      (path
+        (identifier))))
+  (fn_item
+    (attribute
+      (identifier))
+    (identifier)
+    (param_list)
+    (path_type
+      (path
+        (identifier)))
+    (block
+      (integer))))
+
+========================================
+source ledger process
+========================================
+
+pub source Registry(base: String) {
+  query versions(package: String) -> [String];
+}
+ledger WorkspaceLock(path: Path) using json_codec {
+  resource resolution(package: String) -> [String] {
+    resolve(package)
+  }
+}
+pub process workspace(root: Tree) {
+  @WorkspaceRequest { root, binary: true };
+}
+
+----------------------------------------
+
+(source_file
+  (source_item
+    (visibility)
+    (identifier)
+    (param_list
+      (param
+        (identifier_pattern
+          (identifier))
+        (path_type
+          (path
+            (identifier)))))
+    (query
+      (identifier)
+      (param_list
+        (param
+          (identifier_pattern
+            (identifier))
+          (path_type
+            (path
+              (identifier)))))
+      (array_type
+        (path_type
+          (path
+            (identifier))))))
+  (ledger_item
+    (identifier)
+    (param_list
+      (param
+        (identifier_pattern
+          (identifier))
+        (path_type
+          (path
+            (identifier)))))
+    (identifier)
+    (resource
+      (identifier)
+      (param_list
+        (param
+          (identifier_pattern
+            (identifier))
+          (path_type
+            (path
+              (identifier)))))
+      (array_type
+        (path_type
+          (path
+            (identifier))))
+      (block
+        (call_expr
+          (identifier)
+          (arg_list
+            (identifier))))))
+  (process_item
+    (visibility)
+    (identifier)
+    (param_list
+      (param
+        (identifier_pattern
+          (identifier))
+        (path_type
+          (path
+            (identifier)))))
+    (block
+      (expr_statement
+        (request_expr
+          (record_expr
+            (path
+              (identifier))
+            (record_fields
+              (record_field
+                (identifier))
+              (record_field
+                (identifier)
+                (boolean)))))))))
+
+========================================
+realizer
+========================================
+
+realizer build(req: Req) -> Out { Out { v: 1 } }
+
+----------------------------------------
+
+(source_file
+  (realizer_item
+    (identifier)
+    (param_list
+      (param
+        (identifier_pattern
+          (identifier))
+        (path_type
+          (path
+            (identifier)))))
+    (path_type
+      (path
+        (identifier)))
+    (block
+      (record_expr
+        (path
+          (identifier))
+        (record_fields
+          (record_field
+            (identifier)
+            (integer)))))))

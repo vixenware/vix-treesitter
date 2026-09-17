@@ -1,0 +1,609 @@
+========================================
+precedence
+========================================
+
+fn f() -> Bool { a + b * c == d && !e || f <=> g }
+
+----------------------------------------
+
+(source_file
+  (fn_item
+    (identifier)
+    (param_list)
+    (path_type
+      (path
+        (identifier)))
+    (block
+      (binary_expr
+        (binary_expr
+          (binary_expr
+            (binary_expr
+              (identifier)
+              (binary_expr
+                (identifier)
+                (identifier)))
+            (identifier))
+          (unary_expr
+            (identifier)))
+        (binary_expr
+          (identifier)
+          (identifier))))))
+
+========================================
+postfix chain
+========================================
+
+fn f() -> Int { s.domains.get(pkg).values().stream().filter(|v| v > 1).collect()[0]?.len }
+
+----------------------------------------
+
+(source_file
+  (fn_item
+    (identifier)
+    (param_list)
+    (path_type
+      (path
+        (identifier)))
+    (block
+      (field_expr
+        (try_expr
+          (index_expr
+            (method_call_expr
+              (method_call_expr
+                (method_call_expr
+                  (method_call_expr
+                    (method_call_expr
+                      (field_expr
+                        (identifier)
+                        (identifier))
+                      (identifier)
+                      (arg_list
+                        (identifier)))
+                    (identifier)
+                    (arg_list))
+                  (identifier)
+                  (arg_list))
+                (identifier)
+                (arg_list
+                  (closure_expr
+                    (closure_params
+                      (closure_param
+                        (identifier_pattern
+                          (identifier))))
+                    (binary_expr
+                      (identifier)
+                      (integer)))))
+              (identifier)
+              (arg_list))
+            (integer)))
+        (identifier)))))
+
+========================================
+where call and turbofish
+========================================
+
+fn f() -> Int { propagate(s) where { pkg, version: v }.x::<Int>() }
+
+----------------------------------------
+
+(source_file
+  (fn_item
+    (identifier)
+    (param_list)
+    (path_type
+      (path
+        (identifier)))
+    (block
+      (method_call_expr
+        (field_expr
+          (where_expr
+            (call_expr
+              (identifier)
+              (arg_list
+                (identifier)))
+            (where_arg
+              (identifier))
+            (where_arg
+              (identifier)
+              (identifier)))
+          (identifier))
+        (path_type
+          (path
+            (identifier)))
+        (arg_list)))))
+
+========================================
+records and spread
+========================================
+
+fn f() -> S { State { selected: s.selected + (pkg, version), ..s } }
+
+----------------------------------------
+
+(source_file
+  (fn_item
+    (identifier)
+    (param_list)
+    (path_type
+      (path
+        (identifier)))
+    (block
+      (record_expr
+        (path
+          (identifier))
+        (record_fields
+          (record_field
+            (identifier)
+            (binary_expr
+              (field_expr
+                (identifier)
+                (identifier))
+              (tuple_expr
+                (identifier)
+                (identifier))))
+          (spread
+            (identifier)))))))
+
+========================================
+qualified record
+========================================
+
+fn f() -> S { Step.Pass(State { domains: st.domains, ..st }) }
+
+----------------------------------------
+
+(source_file
+  (fn_item
+    (identifier)
+    (param_list)
+    (path_type
+      (path
+        (identifier)))
+    (block
+      (method_call_expr
+        (identifier)
+        (identifier)
+        (arg_list
+          (record_expr
+            (path
+              (identifier))
+            (record_fields
+              (record_field
+                (identifier)
+                (field_expr
+                  (identifier)
+                  (identifier)))
+              (spread
+                (identifier)))))))))
+
+========================================
+anon record map set array
+========================================
+
+fn f() -> Int { let r = { a: 1, "k": 2 }; let m = %{ "a" => 1 }; let s = %[1, 2]; let a = [1, ..rest]; 0 }
+
+----------------------------------------
+
+(source_file
+  (fn_item
+    (identifier)
+    (param_list)
+    (path_type
+      (path
+        (identifier)))
+    (block
+      (let_statement
+        (identifier_pattern
+          (identifier))
+        (anon_record_expr
+          (record_field
+            (identifier)
+            (integer))
+          (map_entry
+            (string)
+            (integer))))
+      (let_statement
+        (identifier_pattern
+          (identifier))
+        (map_expr
+          (map_entry
+            (string)
+            (integer))))
+      (let_statement
+        (identifier_pattern
+          (identifier))
+        (set_expr
+          (integer)
+          (integer)))
+      (let_statement
+        (identifier_pattern
+          (identifier))
+        (array_expr
+          (integer)
+          (spread
+            (identifier))))
+      (integer))))
+
+========================================
+closures
+========================================
+
+fn f() -> Int { xs.fold(0, |acc, x| acc + x); ys.map(fn(a: Int) -> Int { a }); g(|| 1) }
+
+----------------------------------------
+
+(source_file
+  (fn_item
+    (identifier)
+    (param_list)
+    (path_type
+      (path
+        (identifier)))
+    (block
+      (expr_statement
+        (method_call_expr
+          (identifier)
+          (identifier)
+          (arg_list
+            (integer)
+            (closure_expr
+              (closure_params
+                (closure_param
+                  (identifier_pattern
+                    (identifier)))
+                (closure_param
+                  (identifier_pattern
+                    (identifier))))
+              (binary_expr
+                (identifier)
+                (identifier))))))
+      (expr_statement
+        (method_call_expr
+          (identifier)
+          (identifier)
+          (arg_list
+            (fn_closure_expr
+              (param_list
+                (param
+                  (identifier_pattern
+                    (identifier))
+                  (path_type
+                    (path
+                      (identifier)))))
+              (path_type
+                (path
+                  (identifier)))
+              (block
+                (identifier))))))
+      (call_expr
+        (identifier)
+        (arg_list
+          (closure_expr
+            (closure_params)
+            (integer)))))))
+
+========================================
+if match
+========================================
+
+fn f() -> Int {
+    if x.has(y) { 1 } else if z { 2 } else { 3 };
+    match v {
+        None => 0,
+        Some((a, _)) if a > 1 => { a },
+        Shape.Circle { r, .. } => r,
+        -1 => 2,
+    }
+}
+
+----------------------------------------
+
+(source_file
+  (fn_item
+    (identifier)
+    (param_list)
+    (path_type
+      (path
+        (identifier)))
+    (block
+      (expr_statement
+        (if_expr
+          (method_call_expr
+            (identifier)
+            (identifier)
+            (arg_list
+              (identifier)))
+          (block
+            (integer))
+          (if_expr
+            (identifier)
+            (block
+              (integer))
+            (block
+              (integer)))))
+      (expr_statement
+        (match_expr
+          (identifier)
+          (match_arm
+            (identifier_pattern
+              (identifier))
+            (integer))
+          (match_arm
+            (tuple_struct_pattern
+              (path
+                (identifier))
+              (tuple_pattern
+                (identifier_pattern
+                  (identifier))
+                (wildcard_pattern)))
+            (match_guard
+              (binary_expr
+                (identifier)
+                (integer)))
+            (block
+              (identifier)))
+          (match_arm
+            (record_pattern
+              (path
+                (identifier)
+                (identifier))
+              (record_pattern_field
+                (identifier))
+              (rest_pattern))
+            (identifier))
+          (match_arm
+            (literal_pattern
+              (integer))
+            (integer)))))))
+
+========================================
+templates and exec
+========================================
+
+fn f(cc: CToolchain) -> File {
+    let x = `hello {name} {{literal}}`;
+    cc`-c ${src} -o {obj}`;
+    exec sh`-c "echo hi"`;
+    obj
+}
+
+----------------------------------------
+
+(source_file
+  (fn_item
+    (identifier)
+    (param_list
+      (param
+        (identifier_pattern
+          (identifier))
+        (path_type
+          (path
+            (identifier)))))
+    (path_type
+      (path
+        (identifier)))
+    (block
+      (let_statement
+        (identifier_pattern
+          (identifier))
+        (template
+          (template_text)
+          (template_interpolation
+            (identifier))
+          (template_text)))
+      (expr_statement
+        (exec_expr
+          (identifier)
+          (template
+            (template_text)
+            (template_interpolation
+              (identifier))
+            (template_text)
+            (template_interpolation
+              (identifier)))))
+      (expr_statement
+        (exec_expr
+          (path
+            (identifier))
+          (template
+            (template_text))))
+      (identifier))))
+
+========================================
+template control flow
+========================================
+
+fn f() -> Markup { `{for x in xs}<li>{x}</li>{/for}{if show}<b>{label}</b>{else}empty{/if}` }
+
+----------------------------------------
+
+(source_file
+  (fn_item
+    (identifier)
+    (param_list)
+    (path_type
+      (path
+        (identifier)))
+    (block
+      (template
+        (template_for
+          (identifier)
+          (identifier)
+          (template_text)
+          (template_interpolation
+            (identifier))
+          (template_text))
+        (template_if
+          (identifier)
+          (template_text)
+          (template_interpolation
+            (identifier))
+          (template_text)
+          (template_text))))))
+
+========================================
+literals
+========================================
+
+fn f() -> Int { let p = p"src/lib.rs"; let d = 120s; let f = 1.5; let t = true; let sym = :foo; let m = x::source; let r = @Req { a: 1 }; let u = (); let t2 = (1, 2); fail "no" }
+
+----------------------------------------
+
+(source_file
+  (fn_item
+    (identifier)
+    (param_list)
+    (path_type
+      (path
+        (identifier)))
+    (block
+      (let_statement
+        (identifier_pattern
+          (identifier))
+        (prefixed_string
+          (string_prefix)
+          (string_body)))
+      (let_statement
+        (identifier_pattern
+          (identifier))
+        (integer))
+      (let_statement
+        (identifier_pattern
+          (identifier))
+        (float))
+      (let_statement
+        (identifier_pattern
+          (identifier))
+        (boolean))
+      (let_statement
+        (identifier_pattern
+          (identifier))
+        (symbol_expr
+          (identifier)))
+      (let_statement
+        (identifier_pattern
+          (identifier))
+        (metadata_expr
+          (identifier)
+          (identifier)))
+      (let_statement
+        (identifier_pattern
+          (identifier))
+        (request_expr
+          (record_expr
+            (path
+              (identifier))
+            (record_fields
+              (record_field
+                (identifier)
+                (integer))))))
+      (let_statement
+        (identifier_pattern
+          (identifier))
+        (tuple_expr))
+      (let_statement
+        (identifier_pattern
+          (identifier))
+        (tuple_expr
+          (integer)
+          (integer)))
+      (fail_expr
+        (string)))))
+
+========================================
+partial tree yield
+========================================
+
+fn f() -> Int { (partial Answer {}).value }
+fn g() -> Tree { tree { p"a" => f } }
+fn h() -> Int { yield 1 }
+
+----------------------------------------
+
+(source_file
+  (fn_item
+    (identifier)
+    (param_list)
+    (path_type
+      (path
+        (identifier)))
+    (block
+      (field_expr
+        (paren_expr
+          (partial_expr
+            (path
+              (identifier))
+            (record_fields)))
+        (identifier))))
+  (fn_item
+    (identifier)
+    (param_list)
+    (path_type
+      (path
+        (identifier)))
+    (block
+      (tree_expr
+        (map_entry
+          (prefixed_string
+            (string_prefix)
+            (string_body))
+          (identifier)))))
+  (fn_item
+    (identifier)
+    (param_list)
+    (path_type
+      (path
+        (identifier)))
+    (block
+      (yield_expr
+        (integer)))))
+
+========================================
+comments
+========================================
+
+//! module
+// line
+fn f() -> Int { 1 } // trailing
+
+----------------------------------------
+
+(source_file
+  (module_comment)
+  (line_comment)
+  (fn_item
+    (identifier)
+    (param_list)
+    (path_type
+      (path
+        (identifier)))
+    (block
+      (integer)))
+  (line_comment))
+
+========================================
+annotated expr and paths
+========================================
+
+fn f() -> Int { #[cache] g(); self.x }
+
+----------------------------------------
+
+(source_file
+  (fn_item
+    (identifier)
+    (param_list)
+    (path_type
+      (path
+        (identifier)))
+    (block
+      (expr_statement
+        (annotated_expr
+          (attribute
+            (identifier))
+          (call_expr
+            (identifier)
+            (arg_list))))
+      (field_expr
+        (self)
+        (identifier)))))
